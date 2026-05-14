@@ -27,12 +27,12 @@ non-Claude-agent operating protocol: install flow, trust boundary, common tasks,
 and expected read order. Claude Code reads `CLAUDE.md` automatically and can
 continue from here.
 
-If you fetched this file by URL without cloning yet, the upstream companion
-files live at:
+If you fetched this file by URL without cloning yet, the branch companion files
+live at:
 
-- `https://raw.githubusercontent.com/garrytan/gbrain/master/AGENTS.md`
-- `https://raw.githubusercontent.com/garrytan/gbrain/master/llms.txt`
-- `https://raw.githubusercontent.com/garrytan/gbrain/master/llms-full.txt`
+- `https://raw.githubusercontent.com/SkyLewis/gbrain/feat/minimax-m2-chat-expansion/AGENTS.md`
+- `https://raw.githubusercontent.com/SkyLewis/gbrain/feat/minimax-m2-chat-expansion/llms.txt`
+- `https://raw.githubusercontent.com/SkyLewis/gbrain/feat/minimax-m2-chat-expansion/llms-full.txt`
 
 ## Step 1: Install This Branch
 
