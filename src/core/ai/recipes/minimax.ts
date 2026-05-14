@@ -49,9 +49,9 @@ export const minimax: Recipe = {
     chat: {
       models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed'],
       supports_tools: true,
-      // MiniMax exposes OpenAI-compatible tool calls, but gbrain's Minions
-      // subagent loop is still hard-wired to Anthropic Messages persistence.
-      supports_subagent_loop: false,
+      // MiniMax exposes OpenAI-compatible tool calls and is routed through
+      // the provider-neutral gateway path for Minions subagent loops.
+      supports_subagent_loop: true,
       supports_prompt_cache: false,
       max_context_tokens: 204800,
       max_output_tokens: 2048,

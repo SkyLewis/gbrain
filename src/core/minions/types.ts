@@ -485,9 +485,9 @@ export interface ToolCtx {
 /**
  * A tool the subagent can call. Names match Anthropic's constraint
  * `^[a-zA-Z0-9_-]{1,64}$` — no dots. The input_schema is the JSONSchema
- * shipped to the Anthropic Messages API verbatim; ToolDef is the single
- * Anthropic-compatible envelope, not an MCP McpToolDef (those have a
- * different shape — ".inputSchema" vs ".input_schema").
+ * sent to Anthropic directly or adapted through the provider-neutral gateway;
+ * ToolDef is the single Anthropic-compatible envelope, not an MCP McpToolDef
+ * (those have a different shape — ".inputSchema" vs ".input_schema").
  *
  * `idempotent: true` is required for the two-phase replay path: on resume,
  * a 'pending' row can be re-executed. Non-idempotent tools need a separate

@@ -298,7 +298,7 @@ Configure routing:
   gbrain config set models.tier.<tier> <model>       # per-tier (utility/reasoning/deep/subagent)
   gbrain config set models.aliases.<name> <model>    # custom alias
 
-Tiers: utility (haiku-class) | reasoning (sonnet) | deep (opus) | subagent (Anthropic-only)
+Tiers: utility (haiku-class) | reasoning (sonnet) | deep (opus) | subagent (supported tool-loop chat)
 `);
     return;
   }

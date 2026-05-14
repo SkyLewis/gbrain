@@ -1,9 +1,10 @@
 /**
  * Subagent LLM-loop handler (v0.15).
  *
- * Runs one Anthropic Messages API conversation with tool use. The loop is
- * crash-resumable: subagent_messages + subagent_tool_executions together
- * are the single source of truth about where the conversation is. On
+ * Runs one tool-using LLM conversation. Anthropic uses the native Messages
+ * API path; other supported providers use the provider-neutral chat gateway.
+ * The loop is crash-resumable: subagent_messages + subagent_tool_executions
+ * together are the single source of truth about where the conversation is. On
  * resume after a worker kill, we load all committed rows, trust any tool
  * execution marked 'complete' or 'failed', and re-run 'pending' ones only
  * for idempotent tools.
@@ -14,7 +15,8 @@
  *     renewable error so the worker re-claims.
  *   - dual-signal abort wiring (ctx.signal + ctx.shutdownSignal) drains
  *     the in-flight call and commits whatever turns are already persisted.
- *   - Anthropic prompt cache markers on system + tools blocks.
+ *   - Anthropic prompt cache markers on system + tools blocks when the
+ *     active runtime is Anthropic.
  *   - token rollup via ctx.updateTokens per turn.
  *
  * NOT in v0.15: refusal detection, stop_reason=max_tokens partial
@@ -47,14 +49,20 @@ import {
   logSubagentSubmission,
   logSubagentHeartbeat,
 } from './subagent-audit.ts';
-import { resolveModel, isAnthropicProvider, TIER_DEFAULTS } from '../../model-config.ts';
+import { chat as gatewayChat } from '../../ai/gateway.ts';
+import type { ChatBlock, ChatMessage, ChatOpts, ChatResult, ChatToolDef } from '../../ai/gateway.ts';
+import { resolveModel, isAnthropicProvider, isSubagentCapableModel, TIER_DEFAULTS } from '../../model-config.ts';
 
 // ── Defaults ────────────────────────────────────────────────
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TURNS = 20;
 const DEFAULT_RATE_KEY = 'anthropic:messages';
-const DEFAULT_MAX_CONCURRENT = Number(process.env.GBRAIN_ANTHROPIC_MAX_INFLIGHT ?? '8');
+const DEFAULT_MAX_CONCURRENT = Number(
+  process.env.GBRAIN_SUBAGENT_MAX_INFLIGHT
+    ?? process.env.GBRAIN_ANTHROPIC_MAX_INFLIGHT
+    ?? '8',
+);
 const DEFAULT_LEASE_TTL_MS = 120_000;
 const DEFAULT_SYSTEM = 'You are a helpful assistant running as a gbrain subagent.';
 
@@ -80,11 +88,13 @@ export interface SubagentDeps {
    * When `deps.client` is provided, this is unused.
    */
   makeAnthropic?: () => Anthropic;
+  /** Provider-neutral chat client for non-Anthropic subagent runtimes. */
+  chat?: (opts: ChatOpts) => Promise<ChatResult>;
   /** Config (MCP, brain, etc.). Defaults to loadConfig(). */
   config?: GBrainConfig;
-  /** Rate-lease key. Defaults to `anthropic:messages`. */
+  /** Rate-lease key. Defaults to the active provider's chat key. */
   rateLeaseKey?: string;
-  /** Max concurrent inflight calls on that key. Defaults to GBRAIN_ANTHROPIC_MAX_INFLIGHT or 8. */
+  /** Max concurrent inflight calls on that key. Defaults to GBRAIN_SUBAGENT_MAX_INFLIGHT, then legacy GBRAIN_ANTHROPIC_MAX_INFLIGHT, then 8. */
   maxConcurrent?: number;
   /** Lease TTL. Defaults to 120s. */
   leaseTtlMs?: number;
@@ -134,9 +144,13 @@ export function makeSubagentHandler(deps: SubagentDeps) {
   // right object; JS method-call semantics preserve `this` at the call
   // site (subagent.ts invokes client.create(...) with client === sdk.messages).
   const makeAnthropic = deps.makeAnthropic ?? (() => new Anthropic());
-  const client: MessagesClient = deps.client ?? makeAnthropic().messages;
+  let client: MessagesClient | undefined = deps.client;
+  const getAnthropicClient = (): MessagesClient => {
+    if (!client) client = makeAnthropic().messages;
+    return client;
+  };
+  const chatClient = deps.chat ?? gatewayChat;
   const config = deps.config ?? loadConfig() ?? ({ engine: 'postgres' } as GBrainConfig);
-  const rateLeaseKey = deps.rateLeaseKey ?? DEFAULT_RATE_KEY;
   const maxConcurrent = deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
 
@@ -146,17 +160,15 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       throw new Error('subagent job data.prompt is required (string)');
     }
 
-    // v0.31.12 subagent runtime enforcement (Layer 2 of 3 — see plan/Codex F1+F2+F13).
-    // - If `data.model` is set and non-Anthropic, reject (Layer 1 fallback if the
-    //   submit-time guard in MinionQueue.add didn't fire — defense in depth).
-    // - Otherwise route through resolveModel with tier=subagent. The resolver
-    //   warns + falls back to TIER_DEFAULTS.subagent if models.default or
-    //   models.tier.subagent resolved to non-Anthropic.
-    if (data.model && !isAnthropicProvider(data.model)) {
+    // v0.31.12+ subagent runtime enforcement (Layer 2 of 3).
+    // The handler supports Anthropic directly plus provider-neutral chat
+    // recipes that explicitly declare supports_subagent_loop. Reject anything
+    // else if the submit-time guard in MinionQueue.add didn't fire.
+    if (data.model && !isSubagentCapableModel(data.model)) {
       throw new Error(
-        `subagent job rejected: data.model "${data.model}" is non-Anthropic. ` +
-        `The subagent loop is Anthropic-only (Messages API + prompt caching). ` +
-        `Pass an Anthropic model id (e.g. claude-sonnet-4-6) or omit data.model to use the configured default.`,
+        `subagent job rejected: data.model "${data.model}" is not a supported subagent model. ` +
+        `Pass a chat model whose recipe declares supports_subagent_loop ` +
+        `(e.g. claude-sonnet-4-6 or minimax:MiniMax-M2.7), or omit data.model to use the configured default.`,
       );
     }
     const model = data.model
@@ -165,6 +177,15 @@ export function makeSubagentHandler(deps: SubagentDeps) {
         configKey: 'models.subagent',
         fallback: TIER_DEFAULTS.subagent,
       });
+    if (!isSubagentCapableModel(model)) {
+      throw new Error(
+        `subagent model "${model}" is not supported by the runtime. ` +
+        `Set models.tier.subagent to a supported model such as minimax:MiniMax-M2.7 or claude-sonnet-4-6.`,
+      );
+    }
+    const isAnthropicRuntime = isAnthropicProvider(model);
+    const modelForCall = isAnthropicRuntime ? stripAnthropicProvider(model) : model;
+    const rateLeaseKey = deps.rateLeaseKey ?? defaultRateLeaseKeyForModel(model);
     const maxTurns = data.max_turns ?? DEFAULT_MAX_TURNS;
     const systemPrompt = data.system ?? DEFAULT_SYSTEM;
 
@@ -343,32 +364,43 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       // covers the whole request. A mid-call renewal loop would add
       // complexity; for v0.15 we lean on the 120s TTL + abort-on-signal.
       try {
-        const params: Anthropic.MessageCreateParamsNonStreaming = {
-          model,
-          max_tokens: 4096,
-          system: [
-            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
-          ] as any,
-          messages: anthroMessages,
-          ...(toolDefs.length > 0
-            ? {
-                tools: toolDefs.map((t, i) => {
-                  const def: any = {
-                    name: t.name,
-                    description: t.description,
-                    input_schema: t.input_schema,
-                  };
-                  // Cache only the last tool def — Anthropic treats cache_control
-                  // as "cache everything up to and including this block".
-                  if (i === toolDefs.length - 1) def.cache_control = { type: 'ephemeral' };
-                  return def;
-                }),
-              }
-            : {}),
-        };
-
         const combinedSignal = mergeSignals(ctx.signal, ctx.shutdownSignal);
-        assistantMsg = await client.create(params, { signal: combinedSignal });
+        if (isAnthropicRuntime) {
+          const params: Anthropic.MessageCreateParamsNonStreaming = {
+            model: modelForCall,
+            max_tokens: 4096,
+            system: [
+              { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+            ] as any,
+            messages: anthroMessages,
+            ...(toolDefs.length > 0
+              ? {
+                  tools: toolDefs.map((t, i) => {
+                    const def: any = {
+                      name: t.name,
+                      description: t.description,
+                      input_schema: t.input_schema,
+                    };
+                    // Cache only the last tool def — Anthropic treats cache_control
+                    // as "cache everything up to and including this block".
+                    if (i === toolDefs.length - 1) def.cache_control = { type: 'ephemeral' };
+                    return def;
+                  }),
+                }
+              : {}),
+          };
+          assistantMsg = await getAnthropicClient().create(params, { signal: combinedSignal });
+        } else {
+          const result = await chatClient({
+            model: modelForCall,
+            system: systemPrompt,
+            messages: toGatewayMessages(anthroMessages),
+            tools: toolDefs.length > 0 ? toGatewayTools(toolDefs) : undefined,
+            maxTokens: 4096,
+            abortSignal: combinedSignal,
+          });
+          assistantMsg = gatewayResultToAnthropicMessage(result, modelForCall);
+        }
       } catch (err) {
         // Release lease eagerly on error so we don't starve capacity.
         await releaseLease(engine, lease.leaseId!).catch(() => {});
@@ -574,6 +606,133 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       tokens: tokenTotals,
     };
   };
+}
+
+function stripAnthropicProvider(model: string): string {
+  const trimmed = model.trim();
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) return trimmed;
+  return trimmed.slice(0, colon).trim().toLowerCase() === 'anthropic'
+    ? trimmed.slice(colon + 1).trim()
+    : trimmed;
+}
+
+function defaultRateLeaseKeyForModel(model: string): string {
+  if (isAnthropicProvider(model)) return DEFAULT_RATE_KEY;
+  const colon = model.indexOf(':');
+  if (colon !== -1) {
+    const provider = model.slice(0, colon).trim().toLowerCase();
+    if (provider) return `${provider}:chat`;
+  }
+  return 'subagent:chat';
+}
+
+function toGatewayTools(toolDefs: ToolDef[]): ChatToolDef[] {
+  return toolDefs.map(t => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.input_schema,
+  }));
+}
+
+function toGatewayMessages(messages: Anthropic.MessageParam[]): ChatMessage[] {
+  const toolNamesById = new Map<string, string>();
+  return messages.map(m => {
+    if (typeof m.content === 'string') {
+      return { role: m.role, content: m.content };
+    }
+    const blocks: ChatBlock[] = [];
+    for (const block of m.content as ContentBlock[]) {
+      if (block.type === 'text' && typeof block.text === 'string') {
+        blocks.push({ type: 'text', text: block.text });
+        continue;
+      }
+      if (
+        block.type === 'tool_use' &&
+        typeof block.id === 'string' &&
+        typeof block.name === 'string'
+      ) {
+        toolNamesById.set(block.id, block.name);
+        blocks.push({
+          type: 'tool-call',
+          toolCallId: block.id,
+          toolName: block.name,
+          input: block.input,
+        });
+        continue;
+      }
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        blocks.push({
+          type: 'tool-result',
+          toolCallId: block.tool_use_id,
+          toolName: toolNamesById.get(block.tool_use_id) ?? 'tool',
+          output: block.content,
+          isError: block.is_error === true,
+        });
+      }
+    }
+    return { role: m.role, content: blocks };
+  });
+}
+
+function chatBlocksToContentBlocks(blocks: ChatBlock[], fallbackText: string): ContentBlock[] {
+  const converted: ContentBlock[] = [];
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      converted.push({ type: 'text', text: block.text });
+      continue;
+    }
+    if (block.type === 'tool-call') {
+      converted.push({
+        type: 'tool_use',
+        id: block.toolCallId,
+        name: block.toolName,
+        input: block.input,
+      });
+      continue;
+    }
+    if (block.type === 'tool-result') {
+      converted.push({
+        type: 'tool_result',
+        tool_use_id: block.toolCallId,
+        content: block.output,
+        ...(block.isError ? { is_error: true } : {}),
+      });
+    }
+  }
+  if (converted.length === 0 && fallbackText) {
+    converted.push({ type: 'text', text: fallbackText });
+  }
+  return converted;
+}
+
+function gatewayResultToAnthropicMessage(result: ChatResult, model: string): Anthropic.Message {
+  return {
+    id: 'msg_gateway',
+    type: 'message',
+    role: 'assistant',
+    model: result.model || model,
+    stop_reason: toAnthropicStopReason(result.stopReason),
+    stop_sequence: null,
+    content: chatBlocksToContentBlocks(result.blocks, result.text) as any,
+    usage: {
+      input_tokens: result.usage.input_tokens,
+      output_tokens: result.usage.output_tokens,
+      cache_read_input_tokens: result.usage.cache_read_tokens,
+      cache_creation_input_tokens: result.usage.cache_creation_tokens,
+    } as any,
+  } as Anthropic.Message;
+}
+
+function toAnthropicStopReason(stopReason: ChatResult['stopReason']): Anthropic.Message['stop_reason'] {
+  switch (stopReason) {
+    case 'tool_calls':
+      return 'tool_use';
+    case 'length':
+      return 'max_tokens';
+    default:
+      return 'end_turn';
+  }
 }
 
 // ── Internal: persistence ───────────────────────────────────

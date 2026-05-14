@@ -46,7 +46,7 @@ describe('recipe: minimax', () => {
     expect(r.touchpoints.expansion!.cost_per_1m_tokens_usd).toBe(0.3);
   });
 
-  test('chat touchpoint declares M2.7 tools but not subagent-loop support', () => {
+  test('chat touchpoint declares M2.7 tools and subagent-loop support', () => {
     const r = getRecipe('minimax')!;
     expect(r.touchpoints.chat).toBeDefined();
     expect(r.touchpoints.chat!.models).toEqual([
@@ -54,7 +54,7 @@ describe('recipe: minimax', () => {
       'MiniMax-M2.7-highspeed',
     ]);
     expect(r.touchpoints.chat!.supports_tools).toBe(true);
-    expect(r.touchpoints.chat!.supports_subagent_loop).toBe(false);
+    expect(r.touchpoints.chat!.supports_subagent_loop).toBe(true);
     expect(r.touchpoints.chat!.supports_prompt_cache).toBe(false);
     expect(r.touchpoints.chat!.max_context_tokens).toBe(204800);
     expect(r.touchpoints.chat!.max_output_tokens).toBe(2048);

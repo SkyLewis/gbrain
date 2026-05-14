@@ -38,7 +38,7 @@ gbrain init --pglite --model voyage            # use a non-default provider
 - **Quality-first**: Voyage `voyage-4-large` (1024-2048 dims, ~3-4× more dense tokens than OpenAI tiktoken).
 - **Reranking pair**: Voyage (their reranker `rerank-2.5` pairs cleanly with Voyage embeddings).
 - **Enterprise compliance**: Azure OpenAI (data residency + private endpoints) or self-hosted via llama-server / Ollama.
-- **China region**: DashScope (Alibaba) or Zhipu (BigModel). DashScope's international endpoint at `dashscope-intl.aliyuncs.com`; override `provider_base_urls.dashscope` for the China endpoint.
+- **China region**: DashScope (Alibaba) or Zhipu (BigModel). DashScope defaults to `dashscope.aliyuncs.com`; override `provider_base_urls.dashscope` for the international endpoint if needed.
 - **OSS local, full control**: llama-server (`llama.cpp`) for any GGUF model; Ollama for the curated catalog.
 - **Anything else**: LiteLLM proxy. Run LiteLLM in front of any provider (Bedrock, Vertex, Cohere, Jina, Fireworks, etc.) and point gbrain at it via `LITELLM_BASE_URL`.
 
@@ -78,7 +78,7 @@ MiniMax's API takes a `type: 'db' | 'query'` field for asymmetric retrieval. v0.
 
 ### DashScope (Alibaba)
 
-Set `DASHSCOPE_API_KEY`. International endpoint at `dashscope-intl.aliyuncs.com` by default; override `provider_base_urls.dashscope` for the China endpoint. Models: `text-embedding-v3` (current; Matryoshka 64-1024 dims), `text-embedding-v2`.
+Set `DASHSCOPE_API_KEY`. China endpoint at `dashscope.aliyuncs.com` by default; override `provider_base_urls.dashscope` to `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` for the international endpoint. Models: `text-embedding-v4`, `text-embedding-v3` (Matryoshka 64-1024 dims).
 
 CJK-dominant content tokenizes denser than OpenAI tiktoken; gbrain declares `chars_per_token: 2` so the batch pre-split leaves headroom.
 

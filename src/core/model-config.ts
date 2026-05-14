@@ -21,6 +21,7 @@
  */
 
 import type { BrainEngine } from './engine.ts';
+import { resolveRecipe } from './ai/model-resolver.ts';
 
 export type ModelTier = 'utility' | 'reasoning' | 'deep' | 'subagent';
 
@@ -38,9 +39,9 @@ export interface ResolveModelOpts {
    * before the env var. Routing groups: `utility` (haiku-class, classification
    * + expansion + verdict), `reasoning` (sonnet-class, default chat +
    * synthesis + fact extraction), `deep` (opus-class, expensive reasoning),
-   * `subagent` (Anthropic-only multi-turn tool loop — never inherits a
-   * non-Anthropic `models.default`; falls back to TIER_DEFAULTS.subagent
-   * with a one-shot stderr warn instead).
+   * `subagent` (multi-turn tool loop — only inherits models whose recipe
+   * declares supports_subagent_loop; otherwise falls back to
+   * TIER_DEFAULTS.subagent with a one-shot stderr warn).
    */
   tier?: ModelTier;
   /** Hardcoded last-resort fallback. */
@@ -59,7 +60,7 @@ export const DEFAULT_ALIASES: Record<string, string> = {
 /**
  * Default model for each tier. Used as the hardcoded fallback when no
  * `models.tier.<tier>` config + no `models.default` is set. Subagent gets
- * Sonnet (Anthropic Messages API tool-loop shape required); reasoning gets
+ * Sonnet (the lowest-friction supported tool-loop runtime); reasoning gets
  * Sonnet (default workhorse); deep gets Opus 4.7 (expensive reasoning);
  * utility gets Haiku (fast classification).
  *
@@ -76,11 +77,9 @@ export const TIER_DEFAULTS: Record<ModelTier, string> = {
  * v0.31.12 subagent runtime enforcement (layer 2).
  *
  * Returns true if a resolved `provider:model` (or bare model id) points at
- * an Anthropic-shape API. The subagent loop in
- * `src/core/minions/handlers/subagent.ts` makes Anthropic Messages API calls
- * with prompt caching on system + tools; routing it elsewhere silently
- * breaks. When `tier === 'subagent'` resolves to a non-Anthropic provider,
- * we log a stderr warn AND fall back to `TIER_DEFAULTS.subagent`.
+ * an Anthropic API. Bare ids are intentionally conservative because the
+ * provider-neutral gateway requires provider prefixes for non-Anthropic
+ * models.
  */
 export function isAnthropicProvider(modelString: string): boolean {
   if (!modelString) return false;
@@ -94,6 +93,26 @@ export function isAnthropicProvider(modelString: string): boolean {
   // we'd rather warn-on-Anthropic-typo than silently route gpt-5 to the
   // subagent loop.
   return trimmed.toLowerCase().startsWith('claude-');
+}
+
+/**
+ * Returns true when a model can drive the crash-resumable Minions subagent
+ * loop. Anthropic remains supported through the native Messages path for
+ * backwards-compatible bare `claude-*` ids; all other providers must declare
+ * `touchpoints.chat.supports_subagent_loop` and list the concrete model.
+ */
+export function isSubagentCapableModel(modelString: string): boolean {
+  if (!modelString) return false;
+  if (isAnthropicProvider(modelString)) return true;
+  try {
+    const { parsed, recipe } = resolveRecipe(modelString);
+    const chat = recipe.touchpoints.chat;
+    if (!chat?.supports_subagent_loop) return false;
+    const models = chat.models ?? [];
+    return models.length === 0 || models.includes(parsed.modelId);
+  } catch {
+    return false;
+  }
 }
 
 const _subagentTierWarningsEmitted = new Set<string>();
@@ -162,7 +181,7 @@ export async function resolveModel(
     const def = await engine.getConfig('models.default');
     if (def && def.trim()) {
       const resolved = await resolveAlias(engine, def.trim());
-      return enforceSubagentAnthropic(resolved, opts.tier, 'models.default');
+      return enforceSubagentCapable(resolved, opts.tier, 'models.default');
     }
 
     // 5. Tier override (v0.31.12)
@@ -170,7 +189,7 @@ export async function resolveModel(
       const tierVal = await engine.getConfig(`models.tier.${opts.tier}`);
       if (tierVal && tierVal.trim()) {
         const resolved = await resolveAlias(engine, tierVal.trim());
-        return enforceSubagentAnthropic(resolved, opts.tier, `models.tier.${opts.tier}`);
+        return enforceSubagentCapable(resolved, opts.tier, `models.tier.${opts.tier}`);
       }
     }
   }
@@ -179,7 +198,7 @@ export async function resolveModel(
   const env = process.env[envVar];
   if (env && env.trim()) {
     const resolved = await resolveAlias(engine, env.trim());
-    return enforceSubagentAnthropic(resolved, opts.tier, `env:${envVar}`);
+    return enforceSubagentCapable(resolved, opts.tier, `env:${envVar}`);
   }
 
   // 7. Tier default (v0.31.12 — when no override beats us, the tier's
@@ -194,23 +213,23 @@ export async function resolveModel(
 
 /**
  * v0.31.12 subagent runtime enforcement (layer 2): if `tier === 'subagent'`
- * resolved to a non-Anthropic model, warn once per (source, model) and fall
- * back to `TIER_DEFAULTS.subagent`. Source is the resolution-chain step that
- * produced the bad value (`models.default`, `models.tier.subagent`, etc.) so
- * the user sees where to fix it.
+ * resolved to a model that cannot run the subagent loop, warn once per
+ * (source, model) and fall back to `TIER_DEFAULTS.subagent`. Source is the
+ * resolution-chain step that produced the bad value (`models.default`,
+ * `models.tier.subagent`, etc.) so the user sees where to fix it.
  *
  * Returns the resolved value unchanged for non-subagent tiers or when the
- * resolved value is already Anthropic.
+ * resolved value is already subagent-capable.
  */
-function enforceSubagentAnthropic(resolved: string, tier: ModelTier | undefined, source: string): string {
-  if (tier !== 'subagent' || isAnthropicProvider(resolved)) return resolved;
+function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, source: string): string {
+  if (tier !== 'subagent' || isSubagentCapableModel(resolved)) return resolved;
   const key = `${source}:${resolved}`;
   if (!_subagentTierWarningsEmitted.has(key)) {
     _subagentTierWarningsEmitted.add(key);
     process.stderr.write(
-      `[models] tier.subagent resolved to non-Anthropic provider "${resolved}" via "${source}". ` +
-      `The subagent loop is Anthropic-only — falling back to ${TIER_DEFAULTS.subagent}. ` +
-      `Fix: gbrain config set models.tier.subagent anthropic:<model>\n`,
+      `[models] tier.subagent resolved to unsupported subagent model "${resolved}" via "${source}". ` +
+      `The subagent loop requires a chat recipe with supports_subagent_loop — falling back to ${TIER_DEFAULTS.subagent}. ` +
+      `Fix: gbrain config set models.tier.subagent anthropic:<model> or minimax:MiniMax-M2.7\n`,
     );
   }
   return TIER_DEFAULTS.subagent;

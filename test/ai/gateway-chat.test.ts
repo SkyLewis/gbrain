@@ -41,11 +41,10 @@ describe('chat touchpoint — recipe registry', () => {
   });
 
   test('subagent-loop support stays explicit per provider', () => {
-    const subagentReady = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together'];
+    const subagentReady = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together', 'minimax'];
     for (const id of subagentReady) {
       expect(getRecipe(id)!.touchpoints.chat!.supports_subagent_loop, `${id} should support subagent loop`).toBe(true);
     }
-    expect(getRecipe('minimax')!.touchpoints.chat!.supports_subagent_loop).toBe(false);
   });
 
   test('only Anthropic claims supports_prompt_cache=true', () => {

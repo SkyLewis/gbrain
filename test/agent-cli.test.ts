@@ -165,14 +165,13 @@ describe('queue.add trusted-submit gate for subagent', () => {
     expect(ok.name).toBe('subagent_aggregator');
   });
 
-  test('v0.31.12: subagent with non-Anthropic data.model is rejected at submit time (Layer 1)', async () => {
-    // Codex F1 in v0.31.12 plan review: the subagent loop is Anthropic Messages
-    // API + prompt caching. A job submitted with `data.model = openai:gpt-5.5`
-    // would silently fail at runtime with a confusing provider error. The
+  test('v0.31.12: subagent with unsupported data.model is rejected at submit time (Layer 1)', async () => {
+    // Codex F1 in v0.31.12 plan review: a job submitted with an unlisted
+    // subagent model would fail later with a confusing provider error. The
     // submit-time guard rejects BEFORE the job enters the queue.
     await expect(
       queue.add('subagent', { prompt: 'hi', model: 'openai:gpt-5.5' }, {}, { allowProtectedSubmit: true }),
-    ).rejects.toThrow(/non-Anthropic/i);
+    ).rejects.toThrow(/supported subagent model/i);
   });
 
   test('v0.31.12: subagent with Anthropic data.model still succeeds', async () => {
@@ -190,6 +189,16 @@ describe('queue.add trusted-submit gate for subagent', () => {
     const job = await queue.add(
       'subagent',
       { prompt: 'hi', model: 'claude-sonnet-4-6' },
+      {},
+      { allowProtectedSubmit: true },
+    );
+    expect(job.name).toBe('subagent');
+  });
+
+  test('subagent with MiniMax M2.7 data.model succeeds at submit time', async () => {
+    const job = await queue.add(
+      'subagent',
+      { prompt: 'hi', model: 'minimax:MiniMax-M2.7' },
       {},
       { allowProtectedSubmit: true },
     );

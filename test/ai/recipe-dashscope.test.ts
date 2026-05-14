@@ -15,16 +15,16 @@ describe('recipe: dashscope', () => {
     expect(r!.tier).toBe('openai-compat');
     expect(r!.implementation).toBe('openai-compatible');
     expect(r!.base_url_default).toBe(
-      'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      'https://dashscope.aliyuncs.com/compatible-mode/v1',
     );
     expect(r!.auth_env?.required).toEqual(['DASHSCOPE_API_KEY']);
   });
 
-  test('embedding touchpoint declares text-embedding-v3 first + 1024 dims', () => {
+  test('embedding touchpoint declares text-embedding-v4 first + 1024 dims', () => {
     const r = getRecipe('dashscope')!;
     expect(r.touchpoints.embedding).toBeDefined();
-    expect(r.touchpoints.embedding!.models[0]).toBe('text-embedding-v3');
-    expect(r.touchpoints.embedding!.models).toContain('text-embedding-v2');
+    expect(r.touchpoints.embedding!.models[0]).toBe('text-embedding-v4');
+    expect(r.touchpoints.embedding!.models).toContain('text-embedding-v3');
     expect(r.touchpoints.embedding!.default_dims).toBe(1024);
     expect(r.touchpoints.embedding!.dims_options).toEqual([64, 128, 256, 512, 768, 1024]);
     // Matryoshka: every dims option ≤ 2000 (HNSW-compatible).
@@ -55,16 +55,19 @@ describe('recipe: dashscope', () => {
     expect(r.touchpoints.embedding!.chars_per_token).toBeGreaterThan(0);
   });
 
-  test('dimsProviderOptions threads dimensions for text-embedding-v3 (Matryoshka)', async () => {
-    // Codex finding #1: DashScope text-embedding-v3 is Matryoshka 64-1024.
+  test('dimsProviderOptions threads dimensions for text-embedding-v4/v3 (Matryoshka)', async () => {
+    // DashScope text-embedding-v4/v3 expose a dimensions parameter in the
+    // OpenAI-compatible path.
     // Without `dimensions` on the wire, user-selected non-default dims are
     // silently ignored and the provider returns its default size.
     const { dimsProviderOptions } = await import('../../src/core/ai/dims.ts');
+    expect(dimsProviderOptions('openai-compatible', 'text-embedding-v4', 512))
+      .toEqual({ openaiCompatible: { dimensions: 512 } });
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v3', 512))
       .toEqual({ openaiCompatible: { dimensions: 512 } });
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v3', 1024))
       .toEqual({ openaiCompatible: { dimensions: 1024 } });
-    // text-embedding-v2 is fixed-dim; no passthrough.
+    // text-embedding-v2 is no longer in the recipe and remains fixed here.
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v2', 1024))
       .toBeUndefined();
   });

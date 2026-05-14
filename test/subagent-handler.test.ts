@@ -21,6 +21,7 @@ import {
   type MessagesClient,
 } from '../src/core/minions/handlers/subagent.ts';
 import type { ToolDef, MinionJobContext } from '../src/core/minions/types.ts';
+import type { ChatBlock, ChatOpts, ChatResult } from '../src/core/ai/gateway.ts';
 import type Anthropic from '@anthropic-ai/sdk';
 
 let engine: PGLiteEngine;
@@ -68,6 +69,26 @@ class FakeMessagesClient implements MessagesClient {
       ...r,
     } as Anthropic.Message;
   }
+}
+
+function makeChatResult(
+  blocks: ChatBlock[],
+  text: string,
+  stopReason: ChatResult['stopReason'] = 'end',
+): ChatResult {
+  return {
+    text,
+    blocks,
+    stopReason,
+    usage: {
+      input_tokens: 7,
+      output_tokens: 3,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+    },
+    model: 'minimax:MiniMax-M2.7',
+    providerId: 'minimax',
+  };
 }
 
 // Build a synthetic MinionJobContext around a real minion_jobs row. The
@@ -241,6 +262,78 @@ describe('subagent handler happy path', () => {
     const result = await handler(ctx);
     expect(result.stop_reason).toBe('max_turns');
     expect(result.turns_count).toBe(2);
+  });
+});
+
+describe('subagent handler provider-neutral gateway path', () => {
+  test('MiniMax no-tool end turn uses gateway chat without constructing Anthropic client', async () => {
+    const calls: ChatOpts[] = [];
+    const handler = makeSubagentHandler({
+      engine,
+      makeAnthropic: () => { throw new Error('Anthropic client should not be constructed'); },
+      chat: async (opts) => {
+        calls.push(opts);
+        return makeChatResult([{ type: 'text', text: 'mini ok' }], 'mini ok');
+      },
+      toolRegistry: [],
+    });
+    const ctx = await makeCtx({ prompt: 'hi', model: 'minimax:MiniMax-M2.7' });
+
+    const result = await handler(ctx);
+
+    expect(result.result).toBe('mini ok');
+    expect(result.stop_reason).toBe('end_turn');
+    expect(result.tokens.in).toBe(7);
+    expect(result.tokens.out).toBe(3);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.model).toBe('minimax:MiniMax-M2.7');
+    expect(calls[0]!.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  test('MiniMax tool call round-trips through provider-neutral blocks', async () => {
+    const calls: ChatOpts[] = [];
+    const responses: ChatResult[] = [
+      makeChatResult(
+        [{ type: 'tool-call', toolCallId: 'tu_1', toolName: 'echo', input: { value: 'v1' } }],
+        '',
+        'tool_calls',
+      ),
+      makeChatResult([{ type: 'text', text: 'done' }], 'done'),
+    ];
+    const handler = makeSubagentHandler({
+      engine,
+      makeAnthropic: () => { throw new Error('Anthropic client should not be constructed'); },
+      chat: async (opts) => {
+        calls.push(opts);
+        const next = responses.shift();
+        if (!next) throw new Error('out of scripted chat responses');
+        return next;
+      },
+      toolRegistry: [makeEchoTool()],
+    });
+    const ctx = await makeCtx({ prompt: 'go', model: 'minimax:MiniMax-M2.7' });
+
+    const result = await handler(ctx);
+
+    expect(result.result).toBe('done');
+    expect(calls.length).toBe(2);
+    const secondMessages = calls[1]!.messages;
+    const lastMessage = secondMessages[secondMessages.length - 1]!;
+    expect(lastMessage.role).toBe('user');
+    expect(lastMessage.content).toContainEqual({
+      type: 'tool-result',
+      toolCallId: 'tu_1',
+      toolName: 'echo',
+      output: '{"echoed":{"value":"v1"}}',
+      isError: false,
+    });
+
+    const rows = await engine.executeRaw<{ status: string; output: unknown }>(
+      `SELECT status, output FROM subagent_tool_executions WHERE job_id = $1`,
+      [ctx.id],
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.status).toBe('complete');
   });
 });
 
