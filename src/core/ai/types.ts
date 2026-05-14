@@ -120,11 +120,10 @@ export interface ExpansionTouchpoint {
 }
 
 /**
- * Chat touchpoint: tool-using conversational LLMs that can drive Minions
- * subagents. `supports_tools` and `supports_subagent_loop` are intentionally
- * separate (Codex F-OV-2): some chat-capable models have flaky tool-calling or
- * unstable tool_call_id behavior across replays. supports_subagent_loop is the
- * stricter signal that subagent.ts asserts.
+ * Chat touchpoint: conversational LLMs available through gateway.chat().
+ * `supports_tools` and `supports_subagent_loop` are intentionally separate
+ * (Codex F-OV-2): some chat-capable models expose function calling but do not
+ * match gbrain's crash-resumable Minions subagent loop yet.
  */
 export interface ChatTouchpoint {
   models: string[];
@@ -138,6 +137,7 @@ export interface ChatTouchpoint {
   /** Anthropic-style ephemeral prompt cache markers honored. */
   supports_prompt_cache?: boolean;
   max_context_tokens?: number;
+  max_output_tokens?: number;
   cost_per_1m_input_usd?: number;
   cost_per_1m_output_usd?: number;
   price_last_verified?: string;

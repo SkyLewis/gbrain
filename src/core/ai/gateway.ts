@@ -1424,6 +1424,11 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
 
   const supportsCache = recipe.touchpoints.chat?.supports_prompt_cache === true;
   const useCache = !!opts.cacheSystem && supportsCache;
+  const requestedMaxTokens = opts.maxTokens ?? 4096;
+  const providerMaxTokens = recipe.touchpoints.chat?.max_output_tokens;
+  const maxOutputTokens = providerMaxTokens
+    ? Math.min(requestedMaxTokens, providerMaxTokens)
+    : requestedMaxTokens;
 
   // Build messages. Anthropic prompt-cache markers ride on system + last tool
   // via providerOptions; the AI SDK accepts the system as a string for
@@ -1447,7 +1452,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       system: opts.system,
       messages: opts.messages as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
-      maxOutputTokens: opts.maxTokens ?? 4096,
+      maxOutputTokens,
       abortSignal: opts.abortSignal,
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
     });

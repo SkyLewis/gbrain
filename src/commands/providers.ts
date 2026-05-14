@@ -92,6 +92,7 @@ EXAMPLES
   gbrain providers test --model openai:text-embedding-3-large
   gbrain providers test --touchpoint chat --model anthropic:claude-haiku-4-5
   gbrain providers test --touchpoint chat --model deepseek:deepseek-chat
+  gbrain providers test --touchpoint chat --model minimax:MiniMax-M2.7
   gbrain providers env ollama
   gbrain providers explain --json
 `);
@@ -242,6 +243,7 @@ async function runExplain(args: string[]): Promise<void> {
     DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
     GROQ_API_KEY: !!process.env.GROQ_API_KEY,
     TOGETHER_API_KEY: !!process.env.TOGETHER_API_KEY,
+    MINIMAX_API_KEY: !!process.env.MINIMAX_API_KEY,
   };
 
   // Parallel probes for local providers (1s timeout each)
@@ -358,11 +360,13 @@ function prosFor(r: Recipe, touchpoint: TouchpointFilter): string[] {
     else if (r.id === 'deepseek') out.push('25-40x cheaper than Anthropic', 'Strong reasoning');
     else if (r.id === 'groq') out.push('500 tok/s inference', 'Cheap fallback');
     else if (r.id === 'together') out.push('Open-weights house', 'Llama / Qwen / Mixtral');
+    else if (r.id === 'minimax') out.push('204K context', 'Tool calling', 'Low cost');
     return out;
   }
   if (r.id === 'openai') out.push('Default', 'High quality', 'Wide compatibility');
   else if (r.id === 'google') out.push('Smaller vectors', 'Matryoshka dim flex');
   else if (r.id === 'anthropic') out.push('Default expansion model', 'Best-in-class reasoning');
+  else if (r.id === 'minimax') out.push('1536d embeddings', 'M2.7 expansion/chat in same provider');
   else if (r.id === 'ollama') out.push('Local', 'Free', 'Private');
   else if (r.id === 'voyage') out.push('Best rerank pairing');
   else if (r.id === 'litellm') out.push('Universal coverage (Bedrock/Vertex/Azure/any)');

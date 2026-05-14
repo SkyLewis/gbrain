@@ -70,7 +70,9 @@ Models: `text-embedding-3-large`, `text-embedding-3-small`, `text-embedding-ada-
 
 ### MiniMax (海螺AI)
 
-Set `MINIMAX_API_KEY`. Optional `MINIMAX_GROUP_ID` for org-scoped accounts. Model: `embo-01` (1536 dims).
+Set `MINIMAX_API_KEY`. Optional `MINIMAX_GROUP_ID` for org-scoped accounts. Embedding model: `embo-01` (1536 dims).
+
+The same recipe also exposes MiniMax text models for `expansion` and `chat`: `minimax:MiniMax-M2.7` and `minimax:MiniMax-M2.7-highspeed`. The default OpenAI-compatible endpoint is `https://api.minimax.io/v1`; China-region users can override `provider_base_urls.minimax` to `https://api.minimaxi.com/v1`.
 
 MiniMax's API takes a `type: 'db' | 'query'` field for asymmetric retrieval. v0.32 routes everything as `type='db'` (symmetric retrieval — same vector space for indexing and queries). Asymmetric query support is a v0.32.x follow-up.
 

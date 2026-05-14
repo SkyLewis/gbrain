@@ -6,7 +6,7 @@
  *   - assertTouchpoint surfaces chat-only providers correctly
  *   - getChatModel() default + override
  *   - chat_fallback_chain plumbing (config plumbing only — chatWithFallback ships in commit 3)
- *   - new openai-compat recipes (deepseek, groq, together) parse + resolve
+ *   - openai-compat recipes (deepseek, groq, together, minimax) parse + resolve
  *   - new ChatTouchpoint shape: supports_subagent_loop, supports_prompt_cache
  *   - mapStopReason via the chat() boundary (mocked client) — refusal / content_filter / tool_calls / end / length
  *
@@ -29,15 +29,23 @@ import { AIConfigError } from '../../src/core/ai/errors.ts';
 import { listRecipes, getRecipe } from '../../src/core/ai/recipes/index.ts';
 
 describe('chat touchpoint — recipe registry', () => {
-  test('all six chat-capable providers ship a chat touchpoint with supports_subagent_loop', () => {
-    const expected = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together'];
+  test('all seven chat-capable providers ship a chat touchpoint with tool support', () => {
+    const expected = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together', 'minimax'];
     for (const id of expected) {
       const r = getRecipe(id);
       expect(r, `recipe missing: ${id}`).toBeDefined();
       expect(r!.touchpoints.chat, `${id} missing chat touchpoint`).toBeDefined();
       expect(r!.touchpoints.chat!.models.length, `${id} chat models empty`).toBeGreaterThan(0);
-      expect(r!.touchpoints.chat!.supports_subagent_loop, `${id} should support subagent loop`).toBe(true);
+      expect(r!.touchpoints.chat!.supports_tools, `${id} should support tools`).toBe(true);
     }
+  });
+
+  test('subagent-loop support stays explicit per provider', () => {
+    const subagentReady = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together'];
+    for (const id of subagentReady) {
+      expect(getRecipe(id)!.touchpoints.chat!.supports_subagent_loop, `${id} should support subagent loop`).toBe(true);
+    }
+    expect(getRecipe('minimax')!.touchpoints.chat!.supports_subagent_loop).toBe(false);
   });
 
   test('only Anthropic claims supports_prompt_cache=true', () => {
@@ -60,6 +68,7 @@ describe('chat touchpoint — recipe registry', () => {
     expect(getRecipe('deepseek')!.base_url_default).toBe('https://api.deepseek.com/v1');
     expect(getRecipe('groq')!.base_url_default).toBe('https://api.groq.com/openai/v1');
     expect(getRecipe('together')!.base_url_default).toBe('https://api.together.xyz/v1');
+    expect(getRecipe('minimax')!.base_url_default).toBe('https://api.minimax.io/v1');
   });
 });
 
@@ -105,6 +114,7 @@ describe('chat touchpoint — model resolver + aliases (Codex F-OV-5)', () => {
     expect(() => assertTouchpoint(getRecipe('openai')!, 'chat', 'gpt-5.2')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('google')!, 'chat', 'gemini-2.0-flash')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('deepseek')!, 'chat', 'deepseek-chat')).not.toThrow();
+    expect(() => assertTouchpoint(getRecipe('minimax')!, 'chat', 'MiniMax-M2.7')).not.toThrow();
   });
 
   test('assertTouchpoint rejects chat on embedding-only providers with a fix hint', () => {
